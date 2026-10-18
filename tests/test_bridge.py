@@ -285,3 +285,35 @@ def test_auto_waits_while_not_ready_and_a_manual_job_ends_the_run(monkeypatch):
 def test_auto_min_battery_comes_from_the_map():
     assert state.RobotMap.from_json(AUTO_MAP).auto_min_battery == 75
     assert state.RobotMap.from_json(dict(AUTO_MAP, auto_min_battery=60)).auto_min_battery == 60
+
+
+def test_return_to_base_while_docked_mid_job_ends_the_job_in_place(monkeypatch):
+    # 2026-10-18: cancelling while the robot recharged mid-job sent `dock`; it
+    # left the dock, came back and stopped with "Bin full".
+    status = {"cycle": "clean", "phase": "charge", "notReady": 0}
+    b, sent = make_auto_bridge(monkeypatch, status)
+    asyncio.run(b.handle_command("return_to_base"))
+    assert [c for c, _ in sent] == ["stop"]
+    # Out on the floor: pause, then dock, as before.
+    sent.clear(); status.update(phase="run")
+    asyncio.run(b.handle_command("return_to_base"))
+    assert [c for c, _ in sent] == ["pause", "dock"]
+    # Docked with no job: nothing to send.
+    sent.clear(); status.update(cycle="none", phase="charge")
+    asyncio.run(b.handle_command("return_to_base"))
+    assert sent == []
+
+
+def test_auto_room_jobs_use_the_configured_passes(monkeypatch):
+    status = {"cycle": "none", "phase": "charge", "notReady": 0}
+    b, _ = make_auto_bridge(monkeypatch, status)
+    b.cfg = Config(**{**b.cfg.__dict__, "robot_map": state.RobotMap.from_json(dict(AUTO_MAP, auto_passes=1))})
+    params = []
+
+    async def capture(command, p=None):
+        params.append(p)
+
+    monkeypatch.setattr(b.robot, "send_command", capture)
+    asyncio.run(b.handle_send_command("auto_start"))
+    (p,) = params
+    assert p["regions"][0]["region_id"] == "4" and p["regions"][0]["params"]["twoPass"] is False  # Living Room's default is 2

@@ -279,12 +279,22 @@ class Bridge:
         elif payload == "stop":
             await self.robot.send_command("stop")
         elif payload == "return_to_base":
-            # The robot ignores `dock` while cleaning; pause it first, as HA's
-            # core integration does.
-            if vac == "cleaning":
-                await self.robot.send_command("pause")
-                await asyncio.sleep(1)
-            await self.robot.send_command("dock")
+            m = reported.get("cleanMissionStatus") or {}
+            on_dock = m.get("phase") in ("charge", "recharge", "evac")
+            if on_dock and m.get("cycle") not in (None, "", "none"):
+                # Already home with a job still open (e.g. recharging mid-job):
+                # end the job where it is. `dock` here makes the robot leave and
+                # come back -- seen 2026-10-18, it then stopped with "Bin full".
+                await self.robot.send_command("stop")
+            elif on_dock:
+                log.info("return_to_base: already docked, nothing to do")
+            else:
+                # The robot ignores `dock` while cleaning; pause it first, as HA's
+                # core integration does.
+                if vac == "cleaning":
+                    await self.robot.send_command("pause")
+                    await asyncio.sleep(1)
+                await self.robot.send_command("dock")
         elif payload == "locate":
             await self.robot.send_command("find")
         else:
@@ -378,7 +388,8 @@ class Bridge:
             try:
                 if action[0] == "start":
                     log.info("Auto run: starting %s (%s)", action[1], self.auto.snapshot()["step"])
-                    await self.clean_rooms([action[1]], from_auto=True)
+                    rmap = self.cfg.robot_map
+                    await self.clean_rooms([action[1]], passes=rmap.auto_passes if rmap else None, from_auto=True)
                 elif action[0] == "dock":
                     log.info("Auto run cancelled: sending Roomba home")
                     await self.handle_command("return_to_base")

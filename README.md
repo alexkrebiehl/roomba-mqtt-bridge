@@ -87,9 +87,14 @@ nobody is home. Home Assistant decides when, with two `vacuum.send_command` verb
   and is often "not ready" for several minutes; the run waits for it.
 - Each room job also waits for the battery to be **above `auto_min_battery`** (75 by default, set
   in `ROOMBA_MAP`), so a run never sets off on a low charge; Roomba charges on the dock between
-  rooms. `sensor.roomba_auto`'s `waiting_for` says what a waiting run is waiting for: `battery` or
+  rooms. `auto_passes` (optional) overrides every auto room's passes; 1 keeps a room within a
+  charge (Living Room on 2 passes ran a 76% battery flat in 42 minutes). `sensor.roomba_auto`'s `waiting_for` says what a waiting run is waiting for: `battery` or
   `ready`.
 - `auto_cancel`: stop the run. If one of its room jobs is on the floor, Roomba is sent home.
+
+`return_to_base` (HA's "return to base", the dashboard's Stop / Send home, and `auto_cancel`) ends a
+job in place with `stop` when the robot is already docked mid-job (recharging), instead of sending
+`dock`, which makes it leave and come back.
 
 A job started any other way (dashboard, app, voice, the robot's button) ends the run, keeping its
 place. A finished or cancelled room job is read from `last_mission`; a failed one is retried next
