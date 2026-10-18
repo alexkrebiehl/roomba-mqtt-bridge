@@ -6,11 +6,14 @@ bridge decides when to publish; this module only decides what.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from roombapy import ROOMBA_ERROR_MESSAGES
+
+log = logging.getLogger(__name__)
 
 # Clean Base (dock) state codes, from `reported.dock.state`.
 # 301, 302 and 351 were observed on this s9+ / dock 4500490 on 2026-10-18
@@ -271,11 +274,17 @@ class MissionTracker:
     `bbmssn` holds ok/failed/cancelled totals and is updated when a mission
     finishes, so whichever counter moved is the result. Counters seen on the
     first full state are the baseline, so a restart does not invent a result.
+
+    A job's rooms are fixed when it starts. A `start` without regions that the
+    robot reports while a job is already running cannot change them (a
+    whole-house run begins from idle), so it is logged and ignored rather than
+    turning the job into "all".
     """
 
     rooms: dict[str, str] = field(default_factory=dict)
     _counts: dict[str, int] | None = None
     _start_command: dict[str, Any] | None = None
+    _seen_start: Any = None
 
     @property
     def start_command(self) -> dict[str, Any] | None:
@@ -283,8 +292,13 @@ class MissionTracker:
 
     def update(self, reported: dict[str, Any]) -> dict[str, Any] | None:
         cmd = reported.get("lastCommand")
-        if isinstance(cmd, dict) and cmd.get("command") == "start":
-            self._start_command = cmd
+        if isinstance(cmd, dict) and cmd.get("command") == "start" and cmd.get("time") != self._seen_start:
+            self._seen_start = cmd.get("time")
+            active = _mission(reported).get("cycle") not in (None, "", "none")
+            if cmd.get("regions") or not active or self._start_command is None:
+                self._start_command = cmd
+            else:
+                log.warning("Ignoring a start without regions during a running job: %s", cmd)
         bb = reported.get("bbmssn")
         if not isinstance(bb, dict):
             return None

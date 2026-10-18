@@ -80,6 +80,7 @@ class Bridge:
         self._last_payload: str | None = None
         self._last_message = time.monotonic()
         self._device_info: dict[str, Any] = {}
+        self._last_command_time: Any = None
 
     # ------------------------------------------------------------- discovery
 
@@ -212,6 +213,13 @@ class Bridge:
             self._device_info = {"model": reported.get("sku"),
                                  "sw_version": reported.get("softwareVer")}
             await self.publish_discovery()
+        # Every command the robot reports receiving, from any source (this
+        # bridge, the iRobot app, its cloud), once each.
+        cmd = reported.get("lastCommand")
+        if isinstance(cmd, dict) and cmd.get("time") != self._last_command_time:
+            if self._last_command_time is not None:
+                log.info("Robot reports command: %s", json.dumps(cmd))
+            self._last_command_time = cmd.get("time")
         ended = self.tracker.update(reported)
         if self.mqtt is None:
             return
@@ -234,6 +242,7 @@ class Bridge:
     async def handle_command(self, payload: str) -> None:
         reported = self.robot.master_state.get("state", {}).get("reported", {})
         vac = state.vacuum_state(reported)
+        log.info("HA command %r (vacuum %s, mission %s)", payload, vac, state.mission_state(reported))
         if payload == "start":
             await self.robot.send_command("resume" if vac == "paused" else "start")
         elif payload == "pause":

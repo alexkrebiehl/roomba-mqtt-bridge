@@ -130,3 +130,33 @@ def test_every_derived_value_is_a_declared_option():
         assert state.dock_state(rep)[0] in state.DOCK_OPTIONS
         assert state.mission_state(rep) in state.MISSION_OPTIONS
         assert state.vacuum_state(rep) in state.VACUUM_STATES
+
+
+def _job_state(cmd, cycle, counts):
+    return {"lastCommand": cmd, "cleanMissionStatus": {"cycle": cycle, "phase": "run" if cycle != "none" else "charge"},
+            "bbmssn": dict(zip(("nMssnOk", "nMssnF", "nMssnC"), counts))}
+
+
+def test_regionless_start_mid_job_keeps_the_jobs_rooms():
+    # 2026-10-18: a Living Room job stopped from the dashboard was recorded as
+    # rooms "all". Whatever reported a region-less start mid-job, it must not
+    # rewrite the rooms of the job already running.
+    tracker = state.MissionTracker(rooms=ROOMS)
+    living = {"command": "start", "time": 1, "regions": [{"region_id": "4", "type": "rid"}]}
+    plain = {"command": "start", "time": 2, "regions": None}
+    tracker.update(_job_state(living, "none", (253, 33, 90)))     # baseline, command just sent
+    tracker.update(_job_state(living, "clean", (253, 33, 90)))    # job running
+    tracker.update(_job_state(plain, "clean", (253, 33, 90)))     # stray start mid-job
+    ended = tracker.update(_job_state(plain, "none", (253, 33, 91)))
+    assert ended["result"] == "cancelled"
+    assert ended["rooms"] == ["Living Room"]
+
+
+def test_regionless_start_from_idle_is_a_whole_house_job():
+    tracker = state.MissionTracker(rooms=ROOMS)
+    plain = {"command": "start", "time": 5, "regions": None}
+    tracker.update(_job_state({"command": "dock", "time": 4}, "none", (253, 33, 90)))
+    tracker.update(_job_state(plain, "none", (253, 33, 90)))
+    tracker.update(_job_state(plain, "clean", (253, 33, 90)))
+    ended = tracker.update(_job_state(plain, "none", (254, 33, 90)))
+    assert ended["result"] == "ok" and ended["rooms"] == "all"
