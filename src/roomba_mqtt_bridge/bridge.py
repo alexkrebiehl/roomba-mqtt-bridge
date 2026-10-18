@@ -253,6 +253,8 @@ class Bridge:
         vac = state.vacuum_state(reported)
         log.info("HA command %r (vacuum %s, mission %s)", payload, vac, state.mission_state(reported))
         if payload == "start":
+            if vac != "paused":
+                self._check_can_start()
             await self.robot.send_command("resume" if vac == "paused" else "start")
         elif payload == "pause":
             await self.robot.send_command("pause")
@@ -301,16 +303,35 @@ class Bridge:
                 passes=int(p["passes"]) if p.get("passes") else None,
             )
             return
+        if command in ("start", "clean", "cleanRoom"):
+            self._check_can_start()
         log.info("send_command %s %s", command, json.dumps(params))
         # roombapy refuses a start whose regions list is empty: the robot
         # would read that as "clean the whole house".
         await self.robot.send_command(command, params)
+
+    def not_ready(self) -> int:
+        """The robot's own "won't start" code, 0 when it will take a job.
+
+        A start sent while this is non-zero is acknowledged and held: seen
+        2026-10-18, starts tapped during a code-68 spell ran on their own
+        minutes later (reported as `initiator: manual`). So fresh starts are
+        refused here rather than left to surprise someone.
+        """
+        reported = self.robot.master_state.get("state", {}).get("reported", {})
+        return int((reported.get("cleanMissionStatus") or {}).get("notReady") or 0)
+
+    def _check_can_start(self) -> None:
+        code = self.not_ready()
+        if code:
+            raise RuntimeError(f"Roomba is not ready (notReady {code}); not sending a start it would hold and run later")
 
     async def clean_rooms(self, rooms: list[str], suction: str | None = None,
                           passes: int | None = None) -> None:
         if self.cfg.robot_map is None:
             raise ValueError("ROOMBA_MAP is not configured; room cleaning is off")
         params = self.cfg.robot_map.start_params([str(r) for r in rooms], suction, passes)
+        self._check_can_start()
         log.info("Room clean: %s", json.dumps(params))
         await self.robot.send_command("start", params)
 

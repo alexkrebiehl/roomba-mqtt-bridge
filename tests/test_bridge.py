@@ -187,3 +187,28 @@ def test_job_settings_overrides_mixed_and_whole_house():
     # Both end up on 1 pass (Kitchen by default, Living Room overridden).
     assert state.job_settings(mixed, m) == {"suction": "Mixed", "passes": "1"}
     assert state.job_settings({"command": "start", "regions": None}, m) == {"suction": None, "passes": None}
+
+
+def test_starts_are_refused_while_the_robot_is_not_ready(monkeypatch):
+    b = make_bridge()
+    sent = []
+
+    async def fake_send(command, params=None):
+        sent.append(command)
+
+    monkeypatch.setattr(b.robot, "send_command", fake_send)
+    status = {"cycle": "none", "phase": "charge", "notReady": 68}
+    monkeypatch.setattr(type(b.robot), "master_state",
+                        property(lambda self: {"state": {"reported": {"cleanMissionStatus": status}}}))
+    for attempt in (lambda: b.clean_rooms(["Kitchen"]), lambda: b.handle_command("start"),
+                    lambda: b.handle_send_command('{"command": "start", "regions": [{"region_id": "3", "type": "rid"}]}')):
+        with pytest.raises(RuntimeError):
+            asyncio.run(attempt())
+    assert sent == []
+    status["notReady"] = 0
+    asyncio.run(b.clean_rooms(["Kitchen"]))
+    assert sent == ["start"]
+    # Resuming a paused job isn't a fresh start, so it isn't blocked.
+    status.update(cycle="clean", phase="stop", notReady=6)
+    asyncio.run(b.handle_command("start"))
+    assert sent == ["start", "resume"]
