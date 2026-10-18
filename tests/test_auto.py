@@ -2,7 +2,7 @@ from roomba_mqtt_bridge.auto import LOST_END_TIMEOUT, START_TIMEOUT, AutoRun, Ro
 
 ORDER = ["Living Room", "Laundry Room", "Kitchen", "Dining Room", "Entryway"]
 
-DOCKED = RobotView(mission="idle", on_dock=True, not_ready=0, job_rooms=None)
+DOCKED = RobotView(mission="idle", on_dock=True, not_ready=0, job_rooms=None, battery=100)
 
 
 def cleaning(room, mission="running"):
@@ -73,7 +73,7 @@ def test_waits_while_not_ready_stranded_or_faulted():
     assert auto.on_update(RobotView("idle", True, 68, None), None, 0) == []
     assert auto.on_update(RobotView("idle", False, 6, None), None, 1) == []        # stranded
     assert auto.on_update(RobotView("idle", True, 0, None, ("dock_clogged",)), None, 2) == []
-    assert auto.on_update(RobotView("idle", True, 0, None, ("bin_full",)), None, 3) == [("start", "Living Room")]
+    assert auto.on_update(RobotView("idle", True, 0, None, ("bin_full",), 100), None, 3) == [("start", "Living Room")]
 
 
 def test_someone_elses_job_makes_auto_step_aside():
@@ -130,3 +130,28 @@ def test_start_while_active_is_a_no_op_and_cancel_while_off_does_nothing():
     run_room(auto, "Living Room")
     auto.start()
     assert auto.cleaned == 1 and auto.room == "Laundry Room"
+
+
+def test_each_room_waits_for_more_than_75_percent():
+    auto = AutoRun(ORDER)
+    auto.start()
+    low = RobotView("idle", True, 0, None, battery=40)
+    assert auto.on_update(low, None, 0) == []
+    assert auto.snapshot()["waiting_for"] == "battery"
+    assert auto.on_update(RobotView("idle", True, 0, None, battery=75), None, 1) == []   # must be above 75
+    assert auto.on_update(RobotView("idle", True, 0, None, battery=76), None, 2) == [("start", "Living Room")]
+    assert auto.snapshot()["waiting_for"] is None
+    # Between rooms too: back on the dock at 50%, the next room waits to charge.
+    auto.on_update(cleaning("Living Room"), None, 3)
+    auto.on_update(RobotView("idle", True, 0, None, battery=50), ended("Living Room"), 4)
+    assert auto.on_update(RobotView("idle", True, 0, None, battery=50), None, 5) == []
+    assert auto.snapshot()["waiting_for"] == "battery"
+    assert auto.on_update(RobotView("idle", True, 0, None, battery=90), None, 6) == [("start", "Laundry Room")]
+
+
+def test_waiting_for_says_why():
+    auto = AutoRun(ORDER, min_battery=50)
+    auto.start()
+    auto.on_update(RobotView("idle", True, 68, None, battery=100), None, 0)
+    assert auto.snapshot()["waiting_for"] == "ready"
+    assert auto.on_update(RobotView("idle", True, 0, None, battery=60), None, 1) == [("start", "Living Room")]

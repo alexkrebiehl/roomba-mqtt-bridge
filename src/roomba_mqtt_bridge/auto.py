@@ -36,6 +36,7 @@ class RobotView:
     not_ready: int                     # robot's own "won't start" code, 0 when ready
     job_rooms: list[str] | str | None  # rooms of the job on the floor ("all", or None)
     reasons: tuple[str, ...] = ()      # attention reasons from state.attention()
+    battery: int | None = None         # percent
 
     @property
     def busy(self) -> bool:
@@ -46,15 +47,22 @@ class RobotView:
         return any(str(r).startswith(_BLOCKING) for r in self.reasons)
 
 
+# Below this, an auto room job waits for Roomba to charge (start only when above it).
+MIN_BATTERY = 75
+
+
 @dataclass
 class AutoRun:
     order: list[str]
+    min_battery: int = MIN_BATTERY
     active: bool = False
     index: int = 0          # the room to clean next (or being cleaned now)
     cleaned: int = 0        # rooms finished in this run
     phase: str = "off"
     started_at: float | None = field(default=None, compare=False)
     idle_since: float | None = field(default=None, compare=False)
+    # Why a waiting run hasn't started its next room: "battery", "ready" or None.
+    waiting_for: str | None = field(default=None, compare=False)
 
     # ------------------------------------------------------------- state
     @property
@@ -72,6 +80,8 @@ class AutoRun:
             "next_room": self.room,
             "current_room": self.room if self.phase in ("starting", "cleaning") else None,
             "step": f"{min(self.cleaned + 1, n)} of {n}" if self.active else None,
+            "waiting_for": self.waiting_for if self.phase == "waiting" else None,
+            "min_battery": self.min_battery,
         }
 
     def restore(self, data: dict[str, Any]) -> None:
@@ -154,7 +164,13 @@ class AutoRun:
         if view.busy:
             self.step_aside()  # someone else's job
             return []
-        if view.on_dock and not view.not_ready and not view.fault:
-            self.phase, self.started_at = "starting", now
-            return [("start", self.room)]
-        return []
+        if not (view.on_dock and not view.not_ready and not view.fault):
+            self.waiting_for = "ready"
+            return []
+        # Each room starts on a good charge: Roomba charges on the dock between rooms.
+        if view.battery is None or view.battery <= self.min_battery:
+            self.waiting_for = "battery"
+            return []
+        self.waiting_for = None
+        self.phase, self.started_at = "starting", now
+        return [("start", self.room)]

@@ -237,7 +237,7 @@ def make_auto_bridge(monkeypatch, status):
     monkeypatch.setattr(b.robot, "send_command", fake_send)
     monkeypatch.setattr(b, "publish_auto", no_publish)
     monkeypatch.setattr(type(b.robot), "master_state",
-                        property(lambda self: {"state": {"reported": {"cleanMissionStatus": status}}}))
+                        property(lambda self: {"state": {"reported": {"cleanMissionStatus": status, "batPct": 100}}}))
     return b, sent
 
 
@@ -280,3 +280,8 @@ def test_auto_waits_while_not_ready_and_a_manual_job_ends_the_run(monkeypatch):
     status["notReady"] = 0
     asyncio.run(b.clean_rooms(["Kitchen"]))                # someone starts a job on the dashboard
     assert not b.auto.active
+
+
+def test_auto_min_battery_comes_from_the_map():
+    assert state.RobotMap.from_json(AUTO_MAP).auto_min_battery == 75
+    assert state.RobotMap.from_json(dict(AUTO_MAP, auto_min_battery=60)).auto_min_battery == 60

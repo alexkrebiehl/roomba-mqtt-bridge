@@ -86,7 +86,8 @@ class Bridge:
         self._last_command_time: Any = None
         self._last_mission_line: str | None = None
         rmap = config.robot_map
-        self.auto = AutoRun(list(rmap.auto_order)) if rmap and rmap.auto_order else None
+        self.auto = (AutoRun(list(rmap.auto_order), min_battery=rmap.auto_min_battery)
+                     if rmap and rmap.auto_order else None)
         # Auto acts only once its retained state has been read back (or found
         # absent), so a restart resumes rather than starting a fresh run.
         self._auto_restored = False
@@ -368,6 +369,7 @@ class Bridge:
             not_ready=int(m.get("notReady") or 0),
             job_rooms=attrs["rooms"],
             reasons=tuple(state.attention(reported)),
+            battery=reported.get("batPct") if isinstance(reported.get("batPct"), int) else None,
         )
 
     async def run_auto(self, actions: list[tuple]) -> None:

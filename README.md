@@ -85,6 +85,10 @@ nobody is home. Home Assistant decides when, with two `vacuum.send_command` verb
   robot never reports which room it is in. So the room a run was interrupted in is always known,
   and the next run starts there and wraps round the order. Between rooms Roomba docks, empties,
   and is often "not ready" for several minutes; the run waits for it.
+- Each room job also waits for the battery to be **above `auto_min_battery`** (75 by default, set
+  in `ROOMBA_MAP`), so a run never sets off on a low charge; Roomba charges on the dock between
+  rooms. `sensor.roomba_auto`'s `waiting_for` says what a waiting run is waiting for: `battery` or
+  `ready`.
 - `auto_cancel`: stop the run. If one of its room jobs is on the floor, Roomba is sent home.
 
 A job started any other way (dashboard, app, voice, the robot's button) ends the run, keeping its

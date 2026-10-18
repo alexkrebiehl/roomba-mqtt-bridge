@@ -244,6 +244,8 @@ class RobotMap:
     rooms: tuple[Room, ...]
     # Room names for the "nobody's home" auto run, in its own order.
     auto_order: tuple[str, ...] = ()
+    # An auto room job only starts with the battery above this (percent).
+    auto_min_battery: int = 75
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> RobotMap:
@@ -258,7 +260,7 @@ class RobotMap:
         # Validated (and normalised to the map's spelling) up front, so a typo
         # fails the bridge at start rather than mid-run.
         order = tuple(m.resolve(str(r)).name for r in data.get("auto_order") or [])
-        return cls(m.pmap_id, m.user_pmapv_id, m.rooms, order)
+        return cls(m.pmap_id, m.user_pmapv_id, m.rooms, order, int(data.get("auto_min_battery", 75)))
 
     @property
     def names(self) -> dict[str, str]:
