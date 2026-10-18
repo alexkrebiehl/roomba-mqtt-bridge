@@ -219,3 +219,13 @@ def test_recharge_mid_job_is_not_finishing():
     rep["cleanMissionStatus"] = {"cycle": "clean", "phase": "charge", "rechrgM": 45, "missionId": "M2"}
     tracker.update(rep)
     assert state.mission_state(rep, tracker.has_run(rep)) == "recharging"
+
+
+def test_not_ready_is_reported_and_needs_attention():
+    rep = {"cleanMissionStatus": {"cycle": "none", "phase": "charge", "error": 0, "notReady": 7, "condNotReady": [7]},
+           "dock": {"known": True, "state": 301}}
+    assert "not_ready: 7" in state.attention(rep)
+    attrs = state.mission_attributes(rep, ROOMS, None)
+    assert attrs["not_ready"] == 7 and attrs["cond_not_ready"] == [7]
+    rep["cleanMissionStatus"]["notReady"] = 0
+    assert state.attention(rep) == []

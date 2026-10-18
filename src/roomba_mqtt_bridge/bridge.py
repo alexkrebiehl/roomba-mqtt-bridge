@@ -81,6 +81,7 @@ class Bridge:
         self._last_message = time.monotonic()
         self._device_info: dict[str, Any] = {}
         self._last_command_time: Any = None
+        self._last_mission_line: str | None = None
 
     # ------------------------------------------------------------- discovery
 
@@ -221,6 +222,13 @@ class Bridge:
             if self._last_command_time is not None:
                 log.info("Robot reports command: %s", json.dumps(cmd))
             self._last_command_time = cmd.get("time")
+        # Mission status as the robot reports it, logged on change, so a robot
+        # that ignores commands (notReady) can be diagnosed from the logs.
+        m = reported.get("cleanMissionStatus") or {}
+        line = json.dumps({k: m.get(k) for k in ("cycle", "phase", "error", "notReady", "condNotReady")}, sort_keys=True)
+        if line != self._last_mission_line:
+            log.info("Robot mission status: %s", line)
+            self._last_mission_line = line
         ended = self.tracker.update(reported)
         if self.mqtt is None:
             return

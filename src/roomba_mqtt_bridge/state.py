@@ -178,6 +178,11 @@ def attention(reported: dict[str, Any]) -> list[str]:
         reasons.append("bin_full")
     if mission_state(reported) == "paused" and "stuck" not in reasons:
         reasons.append("paused")
+    # The robot's own "won't start" code (0 when ready). Its meanings aren't
+    # published; seen 2026-10-18 refusing every start after a cancelled job.
+    nr = m.get("notReady") or 0
+    if nr:
+        reasons.append(f"not_ready: {nr}")
     return reasons
 
 
@@ -403,5 +408,7 @@ def mission_attributes(reported: dict[str, Any], rooms: dict[str, str],
         "elapsed_min": m.get("mssnM") if active else None,
         "initiator": m.get("initiator") if active else None,
         "phase": m.get("phase"),
+        "not_ready": m.get("notReady") or 0,
+        "cond_not_ready": m.get("condNotReady") or [],
         **(job_settings(start_command, robot_map) if active else {"suction": None, "passes": None}),
     }
