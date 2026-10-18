@@ -36,10 +36,12 @@ DOCK_OPTIONS = ["ready", "emptying", "clogged", "bag_full", "bag_missing",
 
 # Headline status, most urgent first where several are true at once.
 STATUS_OPTIONS = ["error", "stuck", "cleaning", "returning", "dock_clogged",
-                  "dock_bag_full", "dock_problem", "bin_full", "emptying",
+                  "dock_bag_full", "dock_problem", "emptying", "finishing", "recharging", "bin_full",
                   "paused", "charging", "docked", "idle"]
 
-MISSION_OPTIONS = ["idle", "running", "returning", "paused", "emptying"]
+# finishing: back on the dock after cleaning, job not yet closed (the robot
+# saves its map here). recharging: on the dock mid-job, will carry on.
+MISSION_OPTIONS = ["idle", "running", "returning", "paused", "emptying", "finishing", "recharging"]
 LAST_MISSION_OPTIONS = ["ok", "failed", "cancelled"]
 
 # HA's MQTT vacuum states.
@@ -113,7 +115,14 @@ def fan_speed(reported: dict[str, Any]) -> str | None:
     return None
 
 
-def mission_state(reported: dict[str, Any]) -> str:
+def mission_state(reported: dict[str, Any], has_run: bool = False) -> str:
+    """`has_run`: this job has already been off the dock (see MissionTracker).
+
+    On the dock with the job still open means three different things: about
+    to leave (the first second of a job), recharging to carry on, or wrapping
+    up after cleaning while the map is saved. Seen 2026-10-18: ~17 s of
+    `charge` with cycle `clean` after a job's final bin empty.
+    """
     m = _mission(reported)
     phase, cycle = m.get("phase", ""), m.get("cycle", "none")
     if cycle in (None, "", "none"):
@@ -124,6 +133,10 @@ def mission_state(reported: dict[str, Any]) -> str:
         return "paused"
     if phase == "evac":
         return "emptying"
+    if phase in {"charge", "recharge"}:
+        if phase == "recharge" or (m.get("rechrgM") or 0) > 0:
+            return "recharging"
+        return "finishing" if has_run else "running"
     return "running"
 
 
@@ -143,6 +156,10 @@ def _ts(epoch: Any) -> str | None:
     return datetime.fromtimestamp(epoch, UTC).isoformat()
 
 
+def _emptying(reported: dict[str, Any]) -> bool:
+    return _mission(reported).get("phase") == "evac" or dock_state(reported)[0] == "emptying"
+
+
 def attention(reported: dict[str, Any]) -> list[str]:
     """Reasons someone should look at the robot, most urgent first."""
     reasons: list[str] = []
@@ -155,15 +172,16 @@ def attention(reported: dict[str, Any]) -> list[str]:
     dock, _ = dock_state(reported)
     if dock in DOCK_PROBLEMS:
         reasons.append(f"dock_{dock}")
-    # With a self-emptying dock, a full bin while docked means emptying failed.
-    if bin_full(reported) and vacuum_state(reported) in {"docked", "idle"}:
+    # With a self-emptying dock, a full bin while docked means emptying failed
+    # (but not while the dock is still emptying it).
+    if bin_full(reported) and vacuum_state(reported) in {"docked", "idle"} and not _emptying(reported):
         reasons.append("bin_full")
     if mission_state(reported) == "paused" and "stuck" not in reasons:
         reasons.append("paused")
     return reasons
 
 
-def status(reported: dict[str, Any]) -> str:
+def status(reported: dict[str, Any], has_run: bool = False) -> str:
     m = _mission(reported)
     phase = m.get("phase", "")
     if phase == "stuck":
@@ -182,10 +200,15 @@ def status(reported: dict[str, Any]) -> str:
         return "dock_bag_full"
     if dock in DOCK_PROBLEMS:
         return "dock_problem"
+    if _emptying(reported):
+        return "emptying"
+    # A job still open on the dock outranks the bin: if it is still full once
+    # the job closes, "bin_full" takes over then.
+    ms = mission_state(reported, has_run)
+    if ms in {"finishing", "recharging"}:
+        return ms
     if bin_full(reported) and vac in {"docked", "idle"}:
         return "bin_full"
-    if phase == "evac" or dock == "emptying":
-        return "emptying"
     if vac == "paused":
         return "paused"
     if vac == "docked":
@@ -286,6 +309,11 @@ class MissionTracker:
     _counts: dict[str, int] | None = None
     _start_command: dict[str, Any] | None = None
     _seen_start: Any = None
+    _ran: Any = None  # missionId of the job last seen off the dock
+
+    def has_run(self, reported: dict[str, Any]) -> bool:
+        mid = _mission(reported).get("missionId")
+        return mid is not None and mid == self._ran
 
     @property
     def start_command(self) -> dict[str, Any] | None:
@@ -302,6 +330,10 @@ class MissionTracker:
                 self._start_command = copy.deepcopy(cmd)
             else:
                 log.warning("Ignoring a start without regions during a running job: %s", cmd)
+        m = _mission(reported)
+        if m.get("cycle") not in (None, "", "none") and m.get("phase") in (
+                RUNNING_PHASES | RETURNING_PHASES | {"stop", "pause", "stuck"}):
+            self._ran = m.get("missionId")
         bb = reported.get("bbmssn")
         if not isinstance(bb, dict):
             return None
@@ -327,11 +359,11 @@ class MissionTracker:
 
 
 def mission_attributes(reported: dict[str, Any], rooms: dict[str, str],
-                       start_command: dict[str, Any] | None) -> dict[str, Any]:
+                       start_command: dict[str, Any] | None, has_run: bool = False) -> dict[str, Any]:
     """`start_command` is the tracker's, not `lastCommand`: the app polls the
     robot with `querydock` mid-mission, which replaces `lastCommand`."""
     m = _mission(reported)
-    active = mission_state(reported) != "idle"
+    active = mission_state(reported, has_run) != "idle"
     return {
         "rooms": (command_rooms(start_command, rooms) or "all") if active else None,
         "started": _ts(m.get("mssnStrtTm")) if active else None,

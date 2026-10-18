@@ -20,12 +20,16 @@ built for dashboards, and drops to unavailable when the robot goes quiet.
 | Entity | Values |
 |---|---|
 | `vacuum.roomba` | HA vacuum: start/pause/stop/dock/locate, suction, `send_command`, room cleaning (`vacuum.clean_area`) |
-| `sensor.roomba_status` | `error` `stuck` `cleaning` `returning` `dock_clogged` `dock_bag_full` `dock_problem` `bin_full` `emptying` `paused` `charging` `docked` `idle`; attributes `reasons`, `error` |
+| `sensor.roomba_status` | `error` `stuck` `cleaning` `returning` `dock_clogged` `dock_bag_full` `dock_problem` `emptying` `finishing` `recharging` `bin_full` `paused` `charging` `docked` `idle`; attributes `reasons`, `error` |
 | `sensor.roomba_dock` | `ready` `emptying` `clogged` `bag_full` `bag_missing` `sealing_problem` `comms_problem` `problem` `none` `unknown`; attribute `code` |
 | `binary_sensor.roomba_attention` | on when someone should look; attribute `reasons` |
-| `sensor.roomba_mission` | `idle` `running` `returning` `paused` `emptying`; attributes `rooms`, `started`, `elapsed_min`, `initiator`, `phase` |
+| `sensor.roomba_mission` | `idle` `running` `returning` `paused` `emptying` `finishing` `recharging`; attributes `rooms`, `started`, `elapsed_min`, `initiator`, `phase` |
 | `sensor.roomba_last_mission` | `ok` `failed` `cancelled`; attributes `ended`, `started`, `rooms`, `initiator` |
 | `sensor.roomba_battery`, `binary_sensor.roomba_bin_full`, `binary_sensor.roomba_charging` | |
+
+`finishing` is the robot back on the dock after cleaning with the job still open, while it
+saves its map; `recharging` is a mid-job recharge it will resume from. While the dock empties
+the bin, the bin still reads full, so that doesn't count as `bin_full`.
 
 `status` picks the most urgent of several true conditions: a robot fault, then
 an active job, then dock faults, then a full bin, then routine states. While a

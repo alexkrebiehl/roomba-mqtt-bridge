@@ -181,3 +181,41 @@ def test_pause_and_resume_keep_the_jobs_rooms_when_state_is_updated_in_place():
     reported["cleanMissionStatus"].update(cycle="none", phase="charge")
     reported["bbmssn"]["nMssnOk"] += 1
     assert tracker.update(reported)["rooms"] == ["Living Room"]
+
+
+def test_end_of_job_sequence_from_ha_history():
+    # The phases the robot reported for one job on 2026-10-18 (HA history),
+    # with what each should read as. The wrap-up step (`charge` with the job
+    # still open, after cleaning) used to read "running".
+    tracker = state.MissionTracker(rooms=ROOMS)
+    rep = {"bin": {"full": True}, "batPct": 100, "dock": {"known": True, "state": 301},
+           "bbmssn": {"nMssnOk": 253, "nMssnF": 33, "nMssnC": 91}}
+    seq = [  # (cycle, phase, dock code, expected mission, expected status)
+        ("none", "charge", 301, "idle", "bin_full"),
+        ("clean", "charge", 301, "running", "bin_full"),      # first second of the job
+        ("clean", "evac", 302, "emptying", "emptying"),        # no red "bin full" flash
+        ("clean", "run", 301, "running", "cleaning"),
+        ("clean", "stop", 301, "paused", "paused"),
+        ("clean", "hmUsrDock", 301, "returning", "returning"),
+        ("clean", "evac", 302, "emptying", "emptying"),
+        ("clean", "charge", 301, "finishing", "finishing"),   # saving the map
+        ("none", "charge", 301, "idle", "bin_full"),
+    ]
+    for cycle, phase, code, want_mission, want_status in seq:
+        rep["cleanMissionStatus"] = {"cycle": cycle, "phase": phase, "error": 0, "missionId": "M1"}
+        rep["dock"]["state"] = code
+        tracker.update(rep)
+        ran = tracker.has_run(rep)
+        assert state.mission_state(rep, ran) == want_mission, (phase, cycle)
+        assert state.status(rep, ran) == want_status, (phase, cycle)
+        if phase == "evac":
+            assert "bin_full" not in state.attention(rep)
+
+
+def test_recharge_mid_job_is_not_finishing():
+    tracker = state.MissionTracker()
+    rep = {"cleanMissionStatus": {"cycle": "clean", "phase": "run", "missionId": "M2"}}
+    tracker.update(rep)
+    rep["cleanMissionStatus"] = {"cycle": "clean", "phase": "charge", "rechrgM": 45, "missionId": "M2"}
+    tracker.update(rep)
+    assert state.mission_state(rep, tracker.has_run(rep)) == "recharging"

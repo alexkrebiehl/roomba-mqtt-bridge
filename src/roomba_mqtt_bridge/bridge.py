@@ -184,18 +184,19 @@ class Bridge:
     def snapshot(self, reported: dict[str, Any]) -> dict[str, Any]:
         dock, code = state.dock_state(reported)
         reasons = state.attention(reported)
-        mission = state.mission_state(reported)
+        ran = self.tracker.has_run(reported)
+        mission = state.mission_state(reported, ran)
         bat = reported.get("batPct")
         phase = (reported.get("cleanMissionStatus") or {}).get("phase")
         return {
             "state": state.vacuum_state(reported),
             "fan_speed": state.fan_speed(reported),
-            "status": state.status(reported),
+            "status": state.status(reported, ran),
             "dock": dock,
             "dock_code": code,
             "mission": mission,
             "mission_attributes": state.mission_attributes(
-                reported, self.rooms, self.tracker.start_command),
+                reported, self.rooms, self.tracker.start_command, ran),
             "attention": bool(reasons),
             "attention_reasons": reasons,
             "error": state.error_text(reported),
