@@ -42,7 +42,7 @@ The others come from the dorita980/rest980 community and are unverified.
 
 Rooms are configured, not discovered: the robot stores only numeric region ids,
 and the ids and map version have to match what the iRobot app sends.
-`ROOMBA_MAP` holds them, in the app's room order, with each room's default
+`ROOMBA_MAP` holds them, in cleaning order, with each room's default
 suction and passes:
 
 ```json
@@ -59,7 +59,8 @@ Two ways in, both built by the same code and both refusing an empty room list
   `params: {rooms: [names or ids], suction: Automatic|Eco|Performance, passes: 1|2}`.
   `suction`/`passes` override every selected room for that job only.
 
-Rooms always run in the app's order. Editing rooms in the app renumbers them
+Rooms always run in `ROOMBA_MAP`'s order, whatever order they were asked for in,
+so the list's order is the cleaning order. Editing rooms in the app renumbers them
 and changes both map ids: re-capture with `tools/capture.py`.
 
 Suction set through the vacuum's fan speed is different: it changes the

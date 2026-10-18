@@ -200,7 +200,7 @@ class Room:
 
 @dataclass(frozen=True)
 class RobotMap:
-    """The app's map ids and rooms, in the app's room order.
+    """The app's map ids and rooms, in cleaning order.
 
     `user_pmapv_id` must be the value the app sends, which is not the version
     the robot lists under `pmaps`. Both ids change when rooms are edited in
@@ -237,7 +237,7 @@ class RobotMap:
                      passes: int | None = None) -> dict[str, Any]:
         """Params for a room-scoped `start`, shaped exactly as the app sends it.
 
-        Rooms run in the app's order, not the caller's. `suction`/`passes`
+        Rooms run in the map's order, not the caller's. `suction`/`passes`
         override every room's default for this job only; the robot's saved
         preferences are untouched.
         """
