@@ -160,3 +160,24 @@ def test_regionless_start_from_idle_is_a_whole_house_job():
     tracker.update(_job_state(plain, "clean", (253, 33, 90)))
     ended = tracker.update(_job_state(plain, "none", (254, 33, 90)))
     assert ended["result"] == "ok" and ended["rooms"] == "all"
+
+
+def test_pause_and_resume_keep_the_jobs_rooms_when_state_is_updated_in_place():
+    # roombapy merges each report into one accumulated dict, so `lastCommand`
+    # is the same object before and after a pause. Seen 2026-10-18: pausing a
+    # room job made it read "whole house".
+    tracker = state.MissionTracker(rooms=ROOMS)
+    reported = _job_state({"command": "start", "time": 1, "regions": [{"region_id": "4", "type": "rid"}]},
+                          "none", (253, 33, 90))
+    tracker.update(reported)
+    reported["cleanMissionStatus"].update(cycle="clean", phase="run")
+    tracker.update(reported)
+    for command, t, phase in (("pause", 2, "stop"), ("resume", 3, "run")):
+        reported["lastCommand"].update(command=command, time=t, regions=None)
+        reported["cleanMissionStatus"]["phase"] = phase
+        tracker.update(reported)
+        attrs = state.mission_attributes(reported, ROOMS, tracker.start_command)
+        assert attrs["rooms"] == ["Living Room"], command
+    reported["cleanMissionStatus"].update(cycle="none", phase="charge")
+    reported["bbmssn"]["nMssnOk"] += 1
+    assert tracker.update(reported)["rooms"] == ["Living Room"]

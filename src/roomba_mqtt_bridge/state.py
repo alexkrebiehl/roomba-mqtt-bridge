@@ -6,6 +6,7 @@ bridge decides when to publish; this module only decides what.
 
 from __future__ import annotations
 
+import copy
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -296,7 +297,9 @@ class MissionTracker:
             self._seen_start = cmd.get("time")
             active = _mission(reported).get("cycle") not in (None, "", "none")
             if cmd.get("regions") or not active or self._start_command is None:
-                self._start_command = cmd
+                # A copy: roombapy updates `lastCommand` in place, so a kept
+                # reference would turn into the next command (pause, resume…).
+                self._start_command = copy.deepcopy(cmd)
             else:
                 log.warning("Ignoring a start without regions during a running job: %s", cmd)
         bb = reported.get("bbmssn")
