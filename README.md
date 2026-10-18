@@ -23,9 +23,13 @@ built for dashboards, and drops to unavailable when the robot goes quiet.
 | `sensor.roomba_status` | `error` `stuck` `cleaning` `returning` `dock_clogged` `dock_bag_full` `dock_problem` `emptying` `finishing` `recharging` `bin_full` `paused` `charging` `docked` `idle`; attributes `reasons`, `error` |
 | `sensor.roomba_dock` | `ready` `emptying` `clogged` `bag_full` `bag_missing` `sealing_problem` `comms_problem` `problem` `none` `unknown`; attribute `code` |
 | `binary_sensor.roomba_attention` | on when someone should look; attribute `reasons` |
-| `sensor.roomba_mission` | `idle` `running` `returning` `paused` `emptying` `finishing` `recharging`; attributes `rooms`, `started`, `elapsed_min`, `initiator`, `phase` |
+| `sensor.roomba_mission` | `idle` `running` `returning` `paused` `emptying` `finishing` `recharging`; attributes `rooms`, `started`, `elapsed_min`, `initiator`, `phase`, `suction`, `passes` |
 | `sensor.roomba_last_mission` | `ok` `failed` `cancelled`; attributes `ended`, `started`, `rooms`, `initiator` |
 | `sensor.roomba_battery`, `binary_sensor.roomba_bin_full`, `binary_sensor.roomba_charging` | |
+
+The mission's `suction` and `passes` say what a room job actually got, read from its start
+command: "Room default" when every room ran on its own defaults, the shared override
+otherwise, "Mixed" when rooms differ, and null for a whole-house run.
 
 `finishing` is the robot back on the dock after cleaning with the job still open, while it
 saves its map; `recharging` is a mid-job recharge it will resume from. While the dock empties

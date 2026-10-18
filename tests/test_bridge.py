@@ -159,3 +159,31 @@ def test_send_command_forwards_ha_shaped_params(monkeypatch):
         ("start", {"ordered": 1, "pmap_id": "p", "user_pmapv_id": "v", "regions": [region]}),
         ("find", None),
     ]
+
+
+def test_job_settings_from_the_captured_app_commands():
+    m = state.RobotMap.from_json(ROBOT_MAP)
+    single, every = captured_start_commands()
+    # Living Room on Performance × 2 (its defaults are Automatic × 2).
+    assert state.job_settings(single, m) == {"suction": "Performance", "passes": "Room default"}
+    # Every room on its own defaults.
+    assert state.job_settings(every, m) == {"suction": "Room default", "passes": "Room default"}
+
+
+def test_job_settings_overrides_mixed_and_whole_house():
+    m = state.RobotMap.from_json(ROBOT_MAP)
+    over = m.start_params(["Kitchen", "Living Room", "Entryway"], "Performance", 2)
+    assert state.job_settings(over, m) == {"suction": "Performance", "passes": "2"}
+    defaults = m.start_params(["Kitchen", "Living Room"])
+    # Kitchen (Eco ×1) and Living Room (Automatic ×2) differ, but both on defaults.
+    assert state.job_settings(defaults, m) == {"suction": "Room default", "passes": "Room default"}
+    # One override for every room, even where it matches a room's default.
+    eco = m.start_params(["Kitchen", "Living Room"], "Eco", 1)
+    assert state.job_settings(eco, m) == {"suction": "Eco", "passes": "1"}
+    # Different overrides per room, as the iRobot app can send.
+    mixed = m.start_params(["Kitchen", "Living Room"])
+    mixed["regions"][0]["params"].update(carpetBoost=False, vacHigh=True)   # Kitchen → Performance
+    mixed["regions"][1]["params"].update(carpetBoost=False, vacHigh=False, twoPass=False)  # LR → Eco ×1
+    # Both end up on 1 pass (Kitchen by default, Living Room overridden).
+    assert state.job_settings(mixed, m) == {"suction": "Mixed", "passes": "1"}
+    assert state.job_settings({"command": "start", "regions": None}, m) == {"suction": None, "passes": None}

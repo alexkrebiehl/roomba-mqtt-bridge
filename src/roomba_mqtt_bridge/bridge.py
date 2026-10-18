@@ -196,7 +196,7 @@ class Bridge:
             "dock_code": code,
             "mission": mission,
             "mission_attributes": state.mission_attributes(
-                reported, self.rooms, self.tracker.start_command, ran),
+                reported, self.rooms, self.tracker.start_command, ran, self.cfg.robot_map),
             "attention": bool(reasons),
             "attention_reasons": reasons,
             "error": state.error_text(reported),

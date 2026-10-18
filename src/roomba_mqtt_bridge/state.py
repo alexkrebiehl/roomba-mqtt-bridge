@@ -291,6 +291,38 @@ class RobotMap:
                 "user_pmapv_id": self.user_pmapv_id, "regions": regions}
 
 
+def job_settings(command: dict[str, Any] | None, robot_map: RobotMap | None) -> dict[str, str | None]:
+    """What suction and passes a room job actually got, from its start command.
+
+    "Room default" when every room ran on its own defaults, the shared value
+    when they all ran the same override, "Mixed" otherwise. None when there is
+    no room job (whole-house run, or no map to compare against).
+    """
+    none = {"suction": None, "passes": None}
+    regions = (command or {}).get("regions") if isinstance(command, dict) else None
+    if not regions or robot_map is None:
+        return none
+    by_id = {r.id: r for r in robot_map.rooms}
+    got_s, got_p, default_s, default_p = [], [], [], []
+    for region in regions:
+        params = region.get("params") or {}
+        room = by_id.get(str(region.get("region_id")))
+        suction = next((name for name, flags in FAN_SPEEDS.items()
+                        if all(params.get(k) == v for k, v in flags.items())), "Mixed")
+        passes = ("2" if params.get("twoPass") else "1") if params.get("noAutoPasses") else "Auto"
+        got_s.append(suction)
+        got_p.append(passes)
+        default_s.append(suction == (room.suction if room else None))
+        default_p.append(passes == (str(room.passes) if room else None))
+
+    def summary(got: list[str], defaults: list[bool]) -> str:
+        if all(defaults):
+            return "Room default"
+        return got[0] if len(set(got)) == 1 else "Mixed"
+
+    return {"suction": summary(got_s, default_s), "passes": summary(got_p, default_p)}
+
+
 @dataclass
 class MissionTracker:
     """Detects a mission ending from the robot's lifetime counters.
@@ -359,7 +391,8 @@ class MissionTracker:
 
 
 def mission_attributes(reported: dict[str, Any], rooms: dict[str, str],
-                       start_command: dict[str, Any] | None, has_run: bool = False) -> dict[str, Any]:
+                       start_command: dict[str, Any] | None, has_run: bool = False,
+                       robot_map: RobotMap | None = None) -> dict[str, Any]:
     """`start_command` is the tracker's, not `lastCommand`: the app polls the
     robot with `querydock` mid-mission, which replaces `lastCommand`."""
     m = _mission(reported)
@@ -370,4 +403,5 @@ def mission_attributes(reported: dict[str, Any], rooms: dict[str, str],
         "elapsed_min": m.get("mssnM") if active else None,
         "initiator": m.get("initiator") if active else None,
         "phase": m.get("phase"),
+        **(job_settings(start_command, robot_map) if active else {"suction": None, "passes": None}),
     }
