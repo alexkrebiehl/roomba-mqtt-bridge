@@ -389,7 +389,9 @@ class MissionTracker:
             "result": result,
             "ended": datetime.now(UTC).isoformat(),
             "started": _ts(m.get("mssnStrtTm")),
-            "rooms": command_rooms(self._start_command, self.rooms) or "all",
+            # A job started from the robot's button has no command of its own;
+            # the last start command belongs to an earlier job.
+            "rooms": "all" if m.get("initiator") == "manual" else command_rooms(self._start_command, self.rooms) or "all",
             "initiator": m.get("initiator"),
             "mission_id": m.get("missionId"),
         }
@@ -402,6 +404,8 @@ def mission_attributes(reported: dict[str, Any], rooms: dict[str, str],
     robot with `querydock` mid-mission, which replaces `lastCommand`."""
     m = _mission(reported)
     active = mission_state(reported, has_run) != "idle"
+    if m.get("initiator") == "manual":
+        start_command = None  # started from the robot's button: no command of its own
     return {
         "rooms": (command_rooms(start_command, rooms) or "all") if active else None,
         "started": _ts(m.get("mssnStrtTm")) if active else None,

@@ -229,3 +229,19 @@ def test_not_ready_is_reported_and_needs_attention():
     assert attrs["not_ready"] == 7 and attrs["cond_not_ready"] == [7]
     rep["cleanMissionStatus"]["notReady"] = 0
     assert state.attention(rep) == []
+
+
+def test_button_started_job_is_whole_house_not_the_last_commands_rooms():
+    # 2026-10-18: a Clean-button start was labelled with an earlier
+    # dashboard job's rooms ("Living Room").
+    tracker = state.MissionTracker(rooms=ROOMS)
+    living = {"command": "start", "time": 1, "regions": [{"region_id": "4", "type": "rid"}]}
+    rep = {"lastCommand": living, "bbmssn": {"nMssnOk": 1, "nMssnF": 0, "nMssnC": 0},
+           "cleanMissionStatus": {"cycle": "none", "phase": "charge", "initiator": "localApp", "missionId": "A"}}
+    tracker.update(rep)
+    rep["cleanMissionStatus"] = {"cycle": "clean", "phase": "run", "initiator": "manual", "missionId": "B"}
+    tracker.update(rep)
+    assert state.mission_attributes(rep, ROOMS, tracker.start_command, True)["rooms"] == "all"
+    rep["cleanMissionStatus"] = {"cycle": "none", "phase": "charge", "initiator": "manual", "missionId": "B"}
+    rep["bbmssn"] = {"nMssnOk": 1, "nMssnF": 0, "nMssnC": 1}
+    assert tracker.update(rep)["rooms"] == "all"
