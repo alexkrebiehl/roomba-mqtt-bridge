@@ -125,6 +125,13 @@ class AutoRun:
         if not self.active:
             return []
         mine = isinstance(view.job_rooms, list) and view.job_rooms == [self.room]
+        # A job whose rooms are known and aren't ours. "all"/None is not
+        # evidence: the robot reports a job as running a moment before it
+        # reports the command that started it (and a restarted bridge has
+        # lost that command altogether). Seen 2026-10-18: auto read that gap
+        # as someone else's job, let go of its own, and a later cancel found
+        # nothing to cancel.
+        other = isinstance(view.job_rooms, list) and not mine
 
         if ended and self.phase in ("starting", "cleaning") and ended.get("rooms") == [self.room]:
             if ended.get("result") == "ok":
@@ -143,16 +150,21 @@ class AutoRun:
         if self.phase == "starting":
             if view.busy and mine:
                 self.phase = "cleaning"
-            elif view.busy:
+            elif view.busy and other:
                 self.step_aside()
             elif self.started_at is not None and now - self.started_at > START_TIMEOUT:
-                self.phase = "waiting"
+                # Our start never showed up as our job: retry, or, if some job
+                # of unknown rooms is running, it isn't ours to manage.
+                if view.busy:
+                    self.step_aside()
+                else:
+                    self.phase = "waiting"
             return []
 
         if self.phase == "cleaning":
             if view.busy:
                 self.idle_since = None
-                if not mine and view.job_rooms is not None:
+                if other:
                     self.step_aside()  # a different job replaced ours
             else:
                 self.idle_since = self.idle_since if self.idle_since is not None else now

@@ -155,3 +155,28 @@ def test_waiting_for_says_why():
     auto.on_update(RobotView("idle", True, 68, None, battery=100), None, 0)
     assert auto.snapshot()["waiting_for"] == "ready"
     assert auto.on_update(RobotView("idle", True, 0, None, battery=60), None, 1) == [("start", "Living Room")]
+
+
+def test_job_reported_before_its_rooms_is_not_mistaken_for_someone_elses():
+    # 2026-10-18: the robot reported the job running (rooms not yet known, so
+    # "all") a moment before it reported our start command. Auto let go of its
+    # own job, and the cancel when someone came home did nothing.
+    auto = AutoRun(ORDER)
+    auto.start()
+    assert auto.on_update(DOCKED, None, 0) == [("start", "Living Room")]
+    auto.on_update(RobotView("running", True, 0, "all", battery=100), None, 1)
+    assert auto.active and auto.phase == "starting"
+    auto.on_update(cleaning("Living Room"), None, 2)
+    assert auto.phase == "cleaning"
+    # A restarted bridge mid-room also sees "all": still ours.
+    auto.on_update(RobotView("running", False, 0, "all", battery=60), None, 3)
+    assert auto.active and auto.phase == "cleaning"
+    assert auto.cancel(RobotView("running", False, 0, "all", battery=60)) == [("dock",)]
+
+
+def test_unknown_job_that_never_becomes_ours_is_left_alone_after_the_timeout():
+    auto = AutoRun(ORDER)
+    auto.start()
+    auto.on_update(DOCKED, None, 0)
+    auto.on_update(RobotView("running", False, 0, "all", battery=100), None, START_TIMEOUT + 1)
+    assert not auto.active
