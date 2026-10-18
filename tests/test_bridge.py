@@ -212,3 +212,71 @@ def test_starts_are_refused_while_the_robot_is_not_ready(monkeypatch):
     status.update(cycle="clean", phase="stop", notReady=6)
     asyncio.run(b.handle_command("start"))
     assert sent == ["start", "resume"]
+
+
+AUTO_MAP = dict(ROBOT_MAP, auto_order=["living room", "Laundry Room", "Kitchen", "Dining Room", "Entryway"])
+
+
+def make_auto_bridge(monkeypatch, status):
+    b = Bridge(Config(roomba_host="192.0.2.1", roomba_blid="ABC123", roomba_password="x", mqtt_host="localhost",
+                      robot_map=state.RobotMap.from_json(AUTO_MAP)))
+    b._auto_restored = True
+    sent = []
+
+    async def fake_send(command, params=None):
+        sent.append((command, [r["region_id"] for r in (params or {}).get("regions", [])]))
+
+    async def no_publish():
+        return None
+
+    class FakeMqtt:
+        async def publish(self, *a, **k):
+            return None
+
+    b.mqtt = FakeMqtt()
+    monkeypatch.setattr(b.robot, "send_command", fake_send)
+    monkeypatch.setattr(b, "publish_auto", no_publish)
+    monkeypatch.setattr(type(b.robot), "master_state",
+                        property(lambda self: {"state": {"reported": {"cleanMissionStatus": status}}}))
+    return b, sent
+
+
+def test_auto_order_is_validated_and_normalised():
+    m = state.RobotMap.from_json(AUTO_MAP)
+    assert m.auto_order[0] == "Living Room"
+    with pytest.raises(ValueError):
+        state.RobotMap.from_json(dict(ROBOT_MAP, auto_order=["Garage"]))
+
+
+def test_auto_entity_is_discovered_only_with_an_order():
+    b = Bridge(Config(roomba_host="192.0.2.1", roomba_blid="ABC123", roomba_password="x", mqtt_host="localhost",
+                      robot_map=state.RobotMap.from_json(AUTO_MAP)))
+    cmps = b.discovery()["cmps"]
+    assert cmps["auto"]["default_entity_id"] == "sensor.roomba_auto"
+    assert cmps["auto"]["state_topic"] == "roomba/auto"
+    assert "auto" not in make_bridge().discovery()["cmps"]
+
+
+def test_auto_start_starts_the_first_room_and_cancel_sends_it_home(monkeypatch):
+    status = {"cycle": "none", "phase": "charge", "notReady": 0}
+    b, sent = make_auto_bridge(monkeypatch, status)
+    asyncio.run(b.handle_send_command("auto_start"))
+    assert sent == [("start", ["4"])]                     # Living Room
+    assert b.auto.phase == "starting"
+    status.update(cycle="clean", phase="run")
+    b.tracker._start_command = {"command": "start", "regions": [{"region_id": "4", "type": "rid"}]}
+    asyncio.run(b.on_robot_message({}))
+    assert b.auto.phase == "cleaning"
+    asyncio.run(b.handle_send_command("auto_cancel"))
+    assert [c for c, _ in sent] == ["start", "pause", "dock"]
+    assert not b.auto.active and b.auto.room == "Living Room"
+
+
+def test_auto_waits_while_not_ready_and_a_manual_job_ends_the_run(monkeypatch):
+    status = {"cycle": "none", "phase": "charge", "notReady": 68}
+    b, sent = make_auto_bridge(monkeypatch, status)
+    asyncio.run(b.handle_send_command("auto_start"))
+    assert sent == [] and b.auto.phase == "waiting"
+    status["notReady"] = 0
+    asyncio.run(b.clean_rooms(["Kitchen"]))                # someone starts a job on the dashboard
+    assert not b.auto.active

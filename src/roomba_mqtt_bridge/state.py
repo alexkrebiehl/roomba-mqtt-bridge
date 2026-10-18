@@ -242,10 +242,12 @@ class RobotMap:
     pmap_id: str
     user_pmapv_id: str
     rooms: tuple[Room, ...]
+    # Room names for the "nobody's home" auto run, in its own order.
+    auto_order: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> RobotMap:
-        return cls(
+        m = cls(
             pmap_id=data["pmap_id"],
             user_pmapv_id=data["user_pmapv_id"],
             rooms=tuple(Room(id=str(r["id"]), name=r["name"],
@@ -253,6 +255,10 @@ class RobotMap:
                              passes=int(r.get("passes", 1)))
                         for r in data["rooms"]),
         )
+        # Validated (and normalised to the map's spelling) up front, so a typo
+        # fails the bridge at start rather than mid-run.
+        order = tuple(m.resolve(str(r)).name for r in data.get("auto_order") or [])
+        return cls(m.pmap_id, m.user_pmapv_id, m.rooms, order)
 
     @property
     def names(self) -> dict[str, str]:

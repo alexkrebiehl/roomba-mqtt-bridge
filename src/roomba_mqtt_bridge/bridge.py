@@ -18,6 +18,8 @@ import aiomqtt
 from roombapy import RoombaAuthError, RoombaClient, RoombaConnectionError
 
 from . import state
+from .auto import PHASES as AUTO_PHASES
+from .auto import AutoRun, RobotView
 
 log = logging.getLogger("roomba_mqtt_bridge")
 
@@ -72,6 +74,7 @@ class Bridge:
         self.t_fan = f"{t}/set_fan_speed"
         self.t_send = f"{t}/send_command"
         self.t_segments = f"{t}/clean_segments"
+        self.t_auto = f"{t}/auto"
         self.t_ha_status = f"{config.discovery_prefix}/status"
         self.robot = RoombaClient(config.roomba_host, config.roomba_blid, config.roomba_password)
         self.rooms = config.robot_map.names if config.robot_map else {}
@@ -82,6 +85,12 @@ class Bridge:
         self._device_info: dict[str, Any] = {}
         self._last_command_time: Any = None
         self._last_mission_line: str | None = None
+        rmap = config.robot_map
+        self.auto = AutoRun(list(rmap.auto_order)) if rmap and rmap.auto_order else None
+        # Auto acts only once its retained state has been read back (or found
+        # absent), so a restart resumes rather than starting a fresh run.
+        self._auto_restored = False
+        self._last_auto: str | None = None
 
     # ------------------------------------------------------------- discovery
 
@@ -150,6 +159,8 @@ class Bridge:
                                    "{{ value_json.mission_attributes | tojson }}"),
             "last_mission": enum_sensor("last_mission", "Last mission", state.LAST_MISSION_OPTIONS,
                                         "{{ value_json | tojson }}", topic=self.t_last),
+            **({"auto": enum_sensor("auto", "Auto run", AUTO_PHASES, "{{ value_json | tojson }}", topic=self.t_auto)}
+               if self.auto else {}),
             "attention": binary("attention", "Attention", "problem",
                                 "{{ {'reasons': value_json.attention_reasons} | tojson }}"),
             "bin_full": binary("bin_full", "Bin full", "problem"),
@@ -163,6 +174,8 @@ class Bridge:
             },
         }
         components["last_mission"]["value_template"] = "{{ value_json.result }}"
+        if self.auto:
+            components["auto"]["value_template"] = "{{ value_json.state }}"
         return {
             "dev": {
                 "identifiers": [uid],
@@ -235,6 +248,8 @@ class Bridge:
         if ended:
             log.info("Mission ended: %s", ended)
             await self.mqtt.publish(self.t_last, json.dumps(ended), qos=1, retain=True)
+        if self.auto and self._auto_restored:
+            await self.run_auto(self.auto.on_update(self.robot_view(reported), ended, time.monotonic()))
         payload = json.dumps(self.snapshot(reported), sort_keys=True)
         if payload != self._last_payload:
             self._last_payload = payload
@@ -255,6 +270,8 @@ class Bridge:
         if payload == "start":
             if vac != "paused":
                 self._check_can_start()
+                if self.auto:
+                    self.auto.step_aside()
             await self.robot.send_command("resume" if vac == "paused" else "start")
         elif payload == "pause":
             await self.robot.send_command("pause")
@@ -294,6 +311,9 @@ class Bridge:
         if not command:
             log.warning("send_command without a command: %r", payload)
             return
+        if command in ("auto_start", "auto_cancel"):
+            await self.handle_auto(command)
+            return
         if command == "clean_rooms":
             p = params or {}
             rooms = p.get("rooms")
@@ -327,13 +347,85 @@ class Bridge:
             raise RuntimeError(f"Roomba is not ready (notReady {code}); not sending a start it would hold and run later")
 
     async def clean_rooms(self, rooms: list[str], suction: str | None = None,
-                          passes: int | None = None) -> None:
+                          passes: int | None = None, from_auto: bool = False) -> None:
         if self.cfg.robot_map is None:
             raise ValueError("ROOMBA_MAP is not configured; room cleaning is off")
         params = self.cfg.robot_map.start_params([str(r) for r in rooms], suction, passes)
         self._check_can_start()
+        if self.auto and not from_auto:
+            self.auto.step_aside()  # a job started by hand ends the auto run
         log.info("Room clean: %s", json.dumps(params))
         await self.robot.send_command("start", params)
+
+    # -------------------------------------------------------------- auto
+    def robot_view(self, reported: dict[str, Any]) -> RobotView:
+        ran = self.tracker.has_run(reported)
+        m = reported.get("cleanMissionStatus") or {}
+        attrs = state.mission_attributes(reported, self.rooms, self.tracker.start_command, ran)
+        return RobotView(
+            mission=state.mission_state(reported, ran),
+            on_dock=m.get("phase") in ("charge", "evac", "recharge"),
+            not_ready=int(m.get("notReady") or 0),
+            job_rooms=attrs["rooms"],
+            reasons=tuple(state.attention(reported)),
+        )
+
+    async def run_auto(self, actions: list[tuple]) -> None:
+        assert self.auto is not None
+        for action in actions:
+            try:
+                if action[0] == "start":
+                    log.info("Auto run: starting %s (%s)", action[1], self.auto.snapshot()["step"])
+                    await self.clean_rooms([action[1]], from_auto=True)
+                elif action[0] == "dock":
+                    log.info("Auto run cancelled: sending Roomba home")
+                    await self.handle_command("return_to_base")
+            except Exception:
+                log.exception("Auto run action %s failed", action)
+                if action[0] == "start":
+                    self.auto.phase = "waiting"  # try again on a later update
+        await self.publish_auto()
+
+    async def handle_auto(self, command: str) -> None:
+        if self.auto is None:
+            log.warning("%s: no auto_order configured", command)
+            return
+        reported = self.robot.master_state.get("state", {}).get("reported", {})
+        view = self.robot_view(reported)
+        log.info("HA command %s (auto %s)", command, self.auto.phase)
+        if command == "auto_start":
+            self.auto.start()
+            # Start straight away if Roomba is ready, rather than on the next update.
+            actions = self.auto.on_update(view, None, time.monotonic()) if self._auto_restored else []
+        else:
+            actions = self.auto.cancel(view)
+        await self.run_auto(actions)
+
+    async def publish_auto(self) -> None:
+        if self.auto is None or self.mqtt is None:
+            return
+        payload = json.dumps(self.auto.snapshot(), sort_keys=True)
+        if payload != self._last_auto:
+            self._last_auto = payload
+            await self.mqtt.publish(self.t_auto, payload, qos=1, retain=True)
+
+    def restore_auto(self, payload: str | None) -> None:
+        if self.auto is None or self._auto_restored:
+            return
+        if payload:
+            try:
+                self.auto.restore(json.loads(payload))
+                log.info("Auto run restored: %s", self.auto.snapshot())
+            except (ValueError, TypeError):
+                log.warning("Ignoring unreadable auto state %r", payload)
+        self._auto_restored = True
+
+    async def auto_restore_deadline(self) -> None:
+        """No retained auto state within a few seconds means there is none."""
+        await asyncio.sleep(5)
+        if not self._auto_restored:
+            self.restore_auto(None)
+            await self.publish_auto()
 
     async def handle_segments(self, payload: str) -> None:
         ids = json.loads(payload)
@@ -354,6 +446,11 @@ class Bridge:
                 await self.handle_send_command(payload)
             elif topic == self.t_segments:
                 await self.handle_segments(payload)
+            elif topic == self.t_auto:
+                # Our own retained state; read once at start-up, ignored after.
+                if not self._auto_restored:
+                    self.restore_auto(payload)
+                    await self.publish_auto()
         except Exception:
             log.exception("Failed handling %s %r", topic, payload)
 
@@ -398,13 +495,16 @@ class Bridge:
             await mqtt.publish(self.t_robot, "offline", qos=1, retain=True)
             await mqtt.publish(self.t_bridge, "online", qos=1, retain=True)
             await self.publish_discovery()
-            for topic in (self.t_command, self.t_fan, self.t_send, self.t_segments, self.t_ha_status):
+            for topic in (self.t_command, self.t_fan, self.t_send, self.t_segments, self.t_ha_status,
+                          *((self.t_auto,) if self.auto else ())):
                 await mqtt.subscribe(topic, qos=1)
             log.info("MQTT connected to %s:%s", cfg.mqtt_host, cfg.mqtt_port)
             await self.connect_robot()
             try:
                 async with asyncio.TaskGroup() as tg:
                     tg.create_task(self.watchdog())
+                    if self.auto:
+                        tg.create_task(self.auto_restore_deadline())
                     async for message in mqtt.messages:
                         await self.dispatch(message)
             finally:

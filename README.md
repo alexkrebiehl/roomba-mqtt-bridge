@@ -55,7 +55,8 @@ suction and passes:
 
 ```json
 {"pmap_id": "...", "user_pmapv_id": "...",
- "rooms": [{"id": "4", "name": "Living Room", "suction": "Automatic", "passes": 2}]}
+ "rooms": [{"id": "4", "name": "Living Room", "suction": "Automatic", "passes": 2}],
+ "auto_order": ["Living Room", "Laundry Room", "Kitchen"]}
 ```
 
 Two ways in, both built by the same code and both refusing an empty room list
@@ -74,6 +75,25 @@ and changes both map ids: re-capture with `tools/capture.py`.
 Suction set through the vacuum's fan speed is different: it changes the
 robot's saved preference, which later jobs started from the app button also
 use.
+
+## Auto run (nobody home)
+
+With `auto_order` in `ROOMBA_MAP`, the bridge can clean a fixed room order on its own while
+nobody is home. Home Assistant decides when, with two `vacuum.send_command` verbs:
+
+- `auto_start`: start, or resume, the run. Rooms run as **one single-room job each**, because the
+  robot never reports which room it is in. So the room a run was interrupted in is always known,
+  and the next run starts there and wraps round the order. Between rooms Roomba docks, empties,
+  and is often "not ready" for several minutes; the run waits for it.
+- `auto_cancel`: stop the run. If one of its room jobs is on the floor, Roomba is sent home.
+
+A job started any other way (dashboard, app, voice, the robot's button) ends the run, keeping its
+place. A finished or cancelled room job is read from `last_mission`; a failed one is retried next
+run. After the whole order is done, the next run starts from the top.
+
+`sensor.roomba_auto` reports `off` / `waiting` / `starting` / `cleaning`, with attributes `order`,
+`next_room`, `current_room`, `step` ("3 of 5") and `cleaned`. The same message, retained on
+`roomba/auto`, is how a restarted bridge picks the run back up.
 
 ## Configuration
 
